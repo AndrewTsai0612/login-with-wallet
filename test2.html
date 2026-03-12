@@ -1,0 +1,342 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WalletConnect 簽名測試</title>
+
+    <!-- WalletConnect EthereumProvider UMD v2.10.0 (穩定版) -->
+    <script src="https://cdn.jsdelivr.net/npm/@walletconnect/ethereum-provider@2.10.0/dist/index.umd.js"></script>
+
+    <style>
+        body {
+            font-family: monospace;
+            background: #0a0a0f;
+            color: #eee;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            gap: 16px;
+            padding: 24px;
+            box-sizing: border-box;
+        }
+
+        h1 {
+            font-size: 20px;
+            color: #f97316;
+            margin-bottom: 4px;
+        }
+
+        p {
+            font-size: 13px;
+            color: #888;
+            margin-bottom: 8px;
+            text-align: center;
+        }
+
+        .btns {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            width: 100%;
+            max-width: 400px;
+        }
+
+        button {
+            padding: 14px 24px;
+            border: none;
+            border-radius: 10px;
+            font-size: 15px;
+            font-family: monospace;
+            cursor: pointer;
+            transition: opacity .2s;
+            width: 100%;
+        }
+
+        button:hover {
+            opacity: .85;
+        }
+
+        button:disabled {
+            opacity: .4;
+            cursor: not-allowed;
+        }
+
+        #btn-mm {
+            background: #f97316;
+            color: #fff;
+        }
+
+        #btn-wc {
+            background: #3b82f6;
+            color: #fff;
+        }
+
+        #btn-disconnect {
+            background: #333;
+            color: #aaa;
+            display: none;
+        }
+
+        .status {
+            background: #111;
+            border: 1px solid #222;
+            border-radius: 10px;
+            padding: 14px 18px;
+            width: 100%;
+            max-width: 400px;
+            font-size: 13px;
+            line-height: 1.7;
+        }
+
+        .result {
+            background: #111;
+            border: 1px solid #1a3a1a;
+            border-radius: 10px;
+            padding: 14px 18px;
+            width: 100%;
+            max-width: 400px;
+            font-size: 12px;
+            line-height: 1.7;
+            word-break: break-all;
+            display: none;
+        }
+
+        .result label {
+            color: #f97316;
+            font-size: 11px;
+            letter-spacing: .1em;
+            display: block;
+            margin-bottom: 2px;
+        }
+
+        .result .val {
+            color: #10d9a0;
+            margin-bottom: 12px;
+        }
+
+        .result .sig {
+            color: #aaa;
+        }
+
+        .ok {
+            color: #10d9a0;
+        }
+
+        .err {
+            color: #f43f5e;
+        }
+
+        /* QR overlay */
+        #qr-overlay {
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, .88);
+            z-index: 999;
+            align-items: center;
+            justify-content: center;
+            flex-direction: column;
+            gap: 16px;
+        }
+
+        #qr-overlay.show {
+            display: flex;
+        }
+
+        #qr-box {
+            background: #fff;
+            border-radius: 16px;
+            padding: 24px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 12px;
+        }
+
+        #qr-box p {
+            color: #333;
+            font-size: 14px;
+            margin: 0;
+        }
+
+        #qr-img {
+            width: 240px;
+            height: 240px;
+        }
+
+        #btn-cancel {
+            background: transparent;
+            border: 1px solid #444;
+            color: #aaa;
+            font-size: 13px;
+            padding: 8px 20px;
+            width: auto;
+            border-radius: 8px;
+        }
+    </style>
+</head>
+
+<body>
+
+    <h1>🔗 錢包簽名測試</h1>
+    <p>選擇連接方式後，錢包會請你簽名一段訊息</p>
+
+    <div class="btns">
+        <button id="btn-mm" onclick="connectMetaMask()">🦊 MetaMask（電腦）</button>
+        <button id="btn-wc" onclick="connectWalletConnect()">📱 手機錢包 QR Code</button>
+        <button id="btn-disconnect" onclick="doDisconnect()">⏹ 中斷連接</button>
+    </div>
+
+    <div class="status" id="status">等待連接...</div>
+
+    <div class="result" id="result">
+        <label>地址</label>
+        <div class="val" id="r-addr"></div>
+        <label>訊息</label>
+        <div class="val" id="r-msg"></div>
+        <label>簽名結果</label>
+        <div class="sig" id="r-sig"></div>
+    </div>
+
+    <!-- QR Code overlay -->
+    <div id="qr-overlay">
+        <div id="qr-box">
+            <p>📱 用手機錢包掃描此 QR Code</p>
+            <img id="qr-img" src="" alt="QR Code" />
+            <p style="font-size:12px;color:#999">支援 MetaMask App、Trust Wallet、Rainbow 等</p>
+        </div>
+        <button id="btn-cancel" onclick="cancelWC()">取消</button>
+    </div>
+
+    <script>
+        const PROJECT_ID = '662cb20aff5d1b174528df313dee11d6'
+        let wcProvider = null
+        let _cancelReject = null
+
+        const $ = id => document.getElementById(id)
+        const log = (msg, cls = '') => $('status').innerHTML = `<span class="${cls}">${msg}</span>`
+
+        function setBtns(connected) {
+            $('btn-mm').disabled = connected
+            $('btn-wc').disabled = connected
+            $('btn-disconnect').style.display = connected ? 'block' : 'none'
+        }
+
+        function showResult(addr, msg, sig) {
+            $('r-addr').textContent = addr
+            $('r-msg').textContent = msg
+            $('r-sig').textContent = sig
+            $('result').style.display = 'block'
+        }
+
+        function showQR(uri) {
+            $('qr-img').src = `https://api.qrserver.com/v1/create-qr-code/?size=240x240&data=${encodeURIComponent(uri)}`
+            $('qr-overlay').classList.add('show')
+        }
+
+        function hideQR() {
+            $('qr-overlay').classList.remove('show')
+            $('qr-img').src = ''
+        }
+
+        function cancelWC() {
+            hideQR()
+            if (_cancelReject) _cancelReject(new Error('用戶取消'))
+        }
+
+        // ── MetaMask ──
+        async function connectMetaMask() {
+            if (!window.ethereum) {
+                log('❌ 未偵測到 MetaMask，請先安裝擴充功能', 'err'); return
+            }
+            try {
+                $('btn-mm').disabled = true
+                log('⏳ 請在 MetaMask 授權連接...')
+                const [address] = await window.ethereum.request({ method: 'eth_requestAccounts' })
+                log(`⏳ 已連接，等待簽名...`)
+
+                const message = `簽名測試\n\n地址: ${address}\n時間: ${new Date().toLocaleString()}`
+                const sig = await window.ethereum.request({ method: 'personal_sign', params: [message, address] })
+
+                log('✅ 簽名成功！', 'ok')
+                showResult(address, message, sig)
+                setBtns(true)
+            } catch (e) {
+                log(e.code === 4001 ? '❌ 用戶取消' : `❌ ${e.message}`, 'err')
+                $('btn-mm').disabled = false
+            }
+        }
+
+        // ── WalletConnect ──
+        async function connectWalletConnect() {
+            try {
+                $('btn-wc').disabled = true
+                log('⏳ 初始化 WalletConnect...')
+
+                // 正確的全域變數名稱
+                const EthereumProvider = global['@walletconnect/ethereum-provider'].EthereumProvider
+
+                wcProvider = await EthereumProvider.init({
+                    projectId: PROJECT_ID,
+                    showQrModal: false,
+                    chains: [1],
+                    optionalChains: [137, 42161],
+                    metadata: {
+                        name: 'Web3Auth Test',
+                        description: '簽名測試頁面',
+                        url: window.location.origin,
+                        icons: []
+                    }
+                })
+
+                // 顯示 QR Code
+                wcProvider.on('display_uri', uri => {
+                    log('⏳ 請用手機掃描 QR Code...')
+                    showQR(uri)
+                })
+
+                // 等待連接
+                await new Promise((resolve, reject) => {
+                    _cancelReject = reject
+                    wcProvider.once('connect', () => { hideQR(); resolve() })
+                    wcProvider.enable().catch(reject)
+                })
+                _cancelReject = null
+
+                hideQR()
+                const address = wcProvider.accounts[0]
+                log(`⏳ 已連接，請在手機確認簽名...`)
+
+                const message = `簽名測試\n\n地址: ${address}\n時間: ${new Date().toLocaleString()}`
+                const sig = await wcProvider.request({ method: 'personal_sign', params: [message, address] })
+
+                log('✅ 簽名成功！', 'ok')
+                showResult(address, message, sig)
+                setBtns(true)
+            } catch (e) {
+                hideQR()
+                log(`❌ ${e.message || '連接失敗'}`, 'err')
+                $('btn-wc').disabled = false
+                if (wcProvider) { try { await wcProvider.disconnect() } catch (_) { } wcProvider = null }
+            }
+        }
+
+        // ── Disconnect ──
+        async function doDisconnect() {
+            if (wcProvider) {
+                try { await wcProvider.disconnect() } catch (_) { }
+                wcProvider = null
+            }
+            setBtns(false)
+            $('result').style.display = 'none'
+            log('已中斷連接。')
+        }
+    </script>
+
+</body>
+
+</html>
